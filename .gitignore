@@ -1,0 +1,81 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments (uv, venv, conda)
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# uv cache and lock files (if you prefer local-only resolution; keep uv.lock tracked for reproducible builds)
+.uv/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Large Data & Artifacts
+# NOTE: Do NOT push multi-megabyte/gigabyte embeddings or dataset files to Git.
+# Host them on object storage (S3/GCS/HF Hub) or track via Git LFS if strictly necessary.
+artifacts/*.npy
+artifacts/*.npz
+artifacts/*.pkl
+artifacts/*.h5
+artifacts/*.bin
+artifacts/*.onnx
+!artifacts/.gitkeep
+
+# Local data & raw images
+data/
+images/
+*.jpg
+*.jpeg
+*.png
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+artifacts/**
+Sample/**
+myntradataset/**
