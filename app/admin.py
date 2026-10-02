@@ -34,16 +34,18 @@ def _process_image(image_bytes: bytes) -> list[float]:
     summary="Upload and index a new product",
 )
 async def create_product(
-    file: Annotated[UploadFile, File(description="Product photo (.jpg, .jpeg, .png)")],
-    product_name: Annotated[str, Form(...)],
-    gender: Annotated[Optional[str], Form(None)] = None,
-    master_category: Annotated[Optional[str], Form(None)] = None,
-    sub_category: Annotated[Optional[str], Form(None)] = None,
-    article_type: Annotated[Optional[str], Form(None)] = None,
-    base_colour: Annotated[Optional[str], Form(None)] = None,
-    season: Annotated[Optional[str], Form(None)] = None,
-    year: Annotated[Optional[int], Form(None)] = None,
-    usage: Annotated[Optional[str], Form(None)] = None,
+    file: Annotated[
+        UploadFile, File(description="Product photo (.jpg, .jpeg, .png)")
+    ],
+    product_name: Annotated[str, Form()],
+    gender: Annotated[Optional[str], Form()] = None,
+    master_category: Annotated[Optional[str], Form()] = None,
+    sub_category: Annotated[Optional[str], Form()] = None,
+    article_type: Annotated[Optional[str], Form()] = None,
+    base_colour: Annotated[Optional[str], Form()] = None,
+    season: Annotated[Optional[str], Form()] = None,
+    year: Annotated[Optional[int], Form()] = None,
+    usage: Annotated[Optional[str], Form()] = None,
 ) -> AdminActionResponse:
     if file.content_type not in ["image/jpeg", "image/png", "image/jpg", "image/webp"]:
         raise HTTPException(

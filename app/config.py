@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     FILENAMES_PATH: Path = ARTIFACTS_DIR / "filenames.pkl"
     STYLES_PATH: Path = ARTIFACTS_DIR / "styles.csv"
     PCA_MODEL_PATH: Path = ARTIFACTS_DIR / "pca_1024.pkl"
+    ONNX_MODEL_PATH: Path = ARTIFACTS_DIR / "resnet50_extractor.onnx"
 
     IMAGE_SIZE: tuple[int, int] = (224, 224)
     DEFAULT_TOP_K: int = 5
@@ -27,6 +28,8 @@ class Settings(BaseSettings):
 
     # Security
     ADMIN_API_KEY: str 
+
+    DB_URI: str
 
     model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parent.parent / ".env", env_file_encoding="utf-8")
     

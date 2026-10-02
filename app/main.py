@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,12 +47,34 @@ def _process_image_to_vector(image_bytes: bytes) -> list[float]:
     "/recommend",
     response_model=RecommendationResponse,
     tags=["Recommendation"],
+    summary="Recommend products by image with optional metadata filtering",
 )
 async def recommend(
     file: Annotated[UploadFile, File(...)],
     top_k: Annotated[int, Query(ge=1, le=settings.MAX_TOP_K)] = (
         settings.DEFAULT_TOP_K
     ),
+    # Optional metadata filters
+    gender: Annotated[
+        Optional[str],
+        Query(description="Filter by gender (e.g. 'Men', 'Women', 'Unisex')"),
+    ] = None,
+    master_category: Annotated[
+        Optional[str],
+        Query(description="Filter by master category (e.g. 'Apparel', 'Footwear')"),
+    ] = None,
+    sub_category: Annotated[
+        Optional[str],
+        Query(description="Filter by sub-category (e.g. 'Topwear', 'Bottomwear')"),
+    ] = None,
+    article_type: Annotated[
+        Optional[str],
+        Query(description="Filter by exact article type (e.g. 'Shirts', 'Tshirts')"),
+    ] = None,
+    base_colour: Annotated[
+        Optional[str],
+        Query(description="Filter by color (e.g. 'Blue', 'Black')"),
+    ] = None,
 ) -> RecommendationResponse:
     if file.content_type not in [
         "image/jpeg",
@@ -69,20 +91,28 @@ async def recommend(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # 1. Run ResNet + PCA in threadpool
-    query_vector = await run_in_threadpool(
-        _process_image_to_vector, image_bytes
-    )
+    # 1. Feature extraction + PCA in worker threadpool
+    query_vector = await run_in_threadpool(_process_image_to_vector, image_bytes)
 
-    # 2. Call Supabase RPC
-    response = supabase.rpc(
-        "match_products",
-        {
-            "query_embedding": query_vector,
-            "match_threshold": 0.0,
-            "match_count": top_k,
-        },
-    ).execute()
+    # 2. Query Supabase RPC with dynamic filter parameters
+    rpc_params = {
+        "query_embedding": query_vector,
+        "match_threshold": 0.0,
+        "match_count": top_k,
+        "filter_gender": gender,
+        "filter_master_category": master_category,
+        "filter_sub_category": sub_category,
+        "filter_article_type": article_type,
+        "filter_base_colour": base_colour,
+    }
+
+    try:
+        response = supabase.rpc("match_products", rpc_params).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database search failed: {str(exc)}",
+        )
 
     # 3. Format response
     recommendations = [
