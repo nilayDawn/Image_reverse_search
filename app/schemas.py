@@ -42,3 +42,24 @@ class HealthCheckResponse(BaseModel):
     total_indexed_items: int
     embedding_dimension: int
     model_loaded: bool
+
+class ProductUpdatePayload(BaseModel):
+    """Payload for updating product metadata via PATCH."""
+
+    product_name: Optional[str] = Field(None, description="Updated display title.")
+    gender: Optional[str] = Field(None, description="Target gender.")
+    master_category: Optional[str] = Field(None, description="Master category.")
+    sub_category: Optional[str] = Field(None, description="Sub-category.")
+    article_type: Optional[str] = Field(None, description="Article type.")
+    base_colour: Optional[str] = Field(None, description="Primary color.")
+    season: Optional[str] = Field(None, description="Season.")
+    year: Optional[int] = Field(None, description="Release year.")
+    usage: Optional[str] = Field(None, description="Usage classification.")
+
+
+class AdminActionResponse(BaseModel):
+    """Generic status response for admin mutations."""
+
+    success: bool
+    message: str
+    product_id: str

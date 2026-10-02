@@ -1,57 +1,115 @@
-"""FastAPI application entry point.
-
-Exposes:
-- GET  /health     : Liveness and readiness inspection.
-- POST /recommend  : Visual similarity search from uploaded image.
-"""
-
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
+from supabase import Client, create_client
 
 from app.config import settings
 from app.model import recommender
-from app.schemas import HealthCheckResponse, RecommendationResponse
+from app.schemas import HealthCheckResponse, RecommendationResponse, RecommendedItem
+
+from app.admin import admin_router
+
+# Initialize Supabase Client
+supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle manager handling startup pre-loading and graceful teardown."""
-    print("Initializing Recommender Engine and loading artifacts...")
-    try:
-        # Load model, embeddings, and FAISS index into RAM once
-        recommender.load_resources()
-        print(f"Indexed {len(recommender.filenames)} items (Dim: {recommender.embedding_dim}).")
-    except Exception as exc:
-        print(f"Failed to initialize recommender engine: {exc}")
-        raise exc
-
-    yield  # Application serves requests here
-
-    # Clean up / shutdown logic if needed
-    print("Shutting down service...")
+    recommender.load_resources()
+    yield
 
 
 app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    title=settings.PROJECT_NAME, version=settings.VERSION, lifespan=lifespan
 )
 
-# Enable Cross-Origin Resource Sharing (CORS) for frontend integrations
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to specific domains in strict production environments
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(admin_router)
+
+def _process_image_to_vector(image_bytes: bytes) -> list[float]:
+    """CPU-bound task offloaded to worker thread pool."""
+    preprocessed = recommender.preprocess_image(image_bytes)
+    vector_1024 = recommender.extract_and_project(preprocessed)
+    return vector_1024.tolist()
+
+
+@app.post(
+    "/recommend",
+    response_model=RecommendationResponse,
+    tags=["Recommendation"],
+)
+async def recommend(
+    file: Annotated[UploadFile, File(...)],
+    top_k: Annotated[int, Query(ge=1, le=settings.MAX_TOP_K)] = (
+        settings.DEFAULT_TOP_K
+    ),
+) -> RecommendationResponse:
+    if file.content_type not in [
+        "image/jpeg",
+        "image/png",
+        "image/jpg",
+        "image/webp",
+    ]:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Unsupported file format",
+        )
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    # 1. Run ResNet + PCA in threadpool
+    query_vector = await run_in_threadpool(
+        _process_image_to_vector, image_bytes
+    )
+
+    # 2. Call Supabase RPC
+    response = supabase.rpc(
+        "match_products",
+        {
+            "query_embedding": query_vector,
+            "match_threshold": 0.0,
+            "match_count": top_k,
+        },
+    ).execute()
+
+    # 3. Format response
+    recommendations = [
+        RecommendedItem(
+            rank=idx,
+            product_id=row["id"],
+            filename=f"{row['id']}.jpg",
+            image_url=row["image_url"],
+            similarity_score=round(row["similarity"], 4),
+            product_name=row["product_name"],
+            gender=row["gender"],
+            master_category=row["master_category"],
+            sub_category=row["sub_category"],
+            article_type=row["article_type"],
+            base_colour=row["base_colour"],
+            season=row["season"],
+            year=row["year"],
+            usage=row["usage"],
+        )
+        for idx, row in enumerate(response.data, start=1)
+    ]
+
+    return RecommendationResponse(
+        total_results=len(recommendations),
+        query_image_name=file.filename or "unknown.jpg",
+        results=recommendations,
+    )
 
 @app.get(
     "/health",
@@ -68,71 +126,3 @@ async def health_check() -> HealthCheckResponse:
         embedding_dimension=recommender.embedding_dim if is_ready else 0,
         model_loaded=recommender.model is not None,
     )
-
-
-def _process_and_search(image_bytes: bytes, top_k: int):
-    """Synchronous CPU pipeline run inside worker thread pool."""
-    # 1. Decode & Preprocess image in-memory
-    preprocessed_img = recommender.preprocess_image(image_bytes)
-
-    # 2. Extract normalized vector
-    query_vector = recommender.extract_features(preprocessed_img)
-
-    # 3. Query FAISS index
-    return recommender.search(query_vector=query_vector, top_k=top_k)
-
-
-@app.post(
-    "/recommend",
-    response_model=RecommendationResponse,
-    tags=["Recommendation"],
-    summary="Find visually similar fashion products",
-)
-async def recommend(
-    file: Annotated[UploadFile, File(description="Query image file (.jpg, .jpeg, .png)")],
-    top_k: Annotated[
-        int,
-        Query(
-            description="Number of similar items to return",
-            ge=1,
-            le=settings.MAX_TOP_K,
-        ),
-    ] = settings.DEFAULT_TOP_K,
-) -> RecommendationResponse:
-    """Accepts an uploaded image and returns the Top-K nearest visual matches."""
-    # Validate content type
-    if file.content_type not in ["image/jpeg", "image/png", "image/jpg", "image/webp"]:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported file type '{file.content_type}'. Please upload a JPEG or PNG image.",
-        )
-
-    try:
-        # Read raw image bytes directly from memory stream
-        image_bytes = await file.read()
-
-        if len(image_bytes) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded file is empty.",
-            )
-
-        # Offload CPU-heavy inference and FAISS search to threadpool
-        results = await run_in_threadpool(_process_and_search, image_bytes, top_k)
-
-        return RecommendationResponse(
-            total_results=len(results),
-            query_image_name=file.filename or "unknown.jpg",
-            results=results,
-        )
-
-    except ValueError as val_err:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(val_err),
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Inference error: {str(exc)}",
-        )
