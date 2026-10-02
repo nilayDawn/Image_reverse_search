@@ -37,7 +37,6 @@ app.add_middleware(
 app.include_router(admin_router)
 
 def _process_image_to_vector(image_bytes: bytes) -> list[float]:
-    """CPU-bound task offloaded to worker thread pool."""
     preprocessed = recommender.preprocess_image(image_bytes)
     vector_1024 = recommender.extract_and_project(preprocessed)
     return vector_1024.tolist()
@@ -47,29 +46,37 @@ def _process_image_to_vector(image_bytes: bytes) -> list[float]:
     "/recommend",
     response_model=RecommendationResponse,
     tags=["Recommendation"],
-    summary="Recommend products by image with optional metadata filtering",
+    summary="Recommend products by visual similarity with automatic filter-based fallback",
 )
 async def recommend(
     file: Annotated[UploadFile, File(...)],
     top_k: Annotated[int, Query(ge=1, le=settings.MAX_TOP_K)] = (
         settings.DEFAULT_TOP_K
     ),
+    match_threshold: Annotated[
+        float,
+        Query(
+            ge=0.0,
+            le=1.0,
+            description="Minimum cosine similarity required to consider an image match.",
+        ),
+    ] = 0.50,
     # Optional metadata filters
     gender: Annotated[
         Optional[str],
-        Query(description="Filter by gender (e.g. 'Men', 'Women', 'Unisex')"),
+        Query(description="Filter by gender (e.g. 'Men', 'Women')"),
     ] = None,
     master_category: Annotated[
         Optional[str],
-        Query(description="Filter by master category (e.g. 'Apparel', 'Footwear')"),
+        Query(description="Filter by master category (e.g. 'Apparel')"),
     ] = None,
     sub_category: Annotated[
         Optional[str],
-        Query(description="Filter by sub-category (e.g. 'Topwear', 'Bottomwear')"),
+        Query(description="Filter by sub-category (e.g. 'Topwear')"),
     ] = None,
     article_type: Annotated[
         Optional[str],
-        Query(description="Filter by exact article type (e.g. 'Shirts', 'Tshirts')"),
+        Query(description="Filter by article type (e.g. 'Shirts')"),
     ] = None,
     base_colour: Annotated[
         Optional[str],
@@ -91,13 +98,15 @@ async def recommend(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # 1. Feature extraction + PCA in worker threadpool
-    query_vector = await run_in_threadpool(_process_image_to_vector, image_bytes)
+    # 1. Extract 1024-d unit vector via ONNX + PCA
+    query_vector = await run_in_threadpool(
+        _process_image_to_vector, image_bytes
+    )
 
-    # 2. Query Supabase RPC with dynamic filter parameters
+    # 2. Attempt visual search via match_products
     rpc_params = {
         "query_embedding": query_vector,
-        "match_threshold": 0.0,
+        "match_threshold": match_threshold,
         "match_count": top_k,
         "filter_gender": gender,
         "filter_master_category": master_category,
@@ -108,13 +117,43 @@ async def recommend(
 
     try:
         response = supabase.rpc("match_products", rpc_params).execute()
+        rows = response.data or []
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database search failed: {str(exc)}",
         )
 
-    # 3. Format response
+    search_mode = "visual_match"
+
+    # 3. Fallback logic: If no visual matches found AND at least one filter was provided
+    has_any_filter = any(
+        [gender, master_category, sub_category, article_type, base_colour]
+    )
+
+    if not rows and has_any_filter:
+        fallback_params = {
+            "filter_gender": gender,
+            "filter_master_category": master_category,
+            "filter_sub_category": sub_category,
+            "filter_article_type": article_type,
+            "filter_base_colour": base_colour,
+            "match_count": top_k,
+        }
+        try:
+            fallback_res = supabase.rpc(
+                "filter_products_only", fallback_params
+            ).execute()
+            rows = fallback_res.data or []
+            if rows:
+                search_mode = "filter_fallback"
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Fallback search failed: {str(exc)}",
+            )
+
+    # 4. Format recommendations payload
     recommendations = [
         RecommendedItem(
             rank=idx,
@@ -132,15 +171,15 @@ async def recommend(
             year=row["year"],
             usage=row["usage"],
         )
-        for idx, row in enumerate(response.data, start=1)
+        for idx, row in enumerate(rows, start=1)
     ]
 
     return RecommendationResponse(
         total_results=len(recommendations),
         query_image_name=file.filename or "unknown.jpg",
+        search_mode=search_mode,
         results=recommendations,
     )
-
 @app.get(
     "/health",
     response_model=HealthCheckResponse,
