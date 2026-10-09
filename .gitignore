@@ -40,15 +40,17 @@ venv.bak/
 .env.*
 !.env.example
 
-# Large Data & Artifacts
-# NOTE: Do NOT push multi-megabyte/gigabyte embeddings or dataset files to Git.
-# Host them on object storage (S3/GCS/HF Hub) or track via Git LFS if strictly necessary.
+# Large Data & Artifacts (Ignore raw embeddings & datasets)
 artifacts/*.npy
 artifacts/*.npz
-artifacts/*.pkl
+artifacts/filenames.pkl
+artifacts/styles.csv
 artifacts/*.h5
 artifacts/*.bin
-artifacts/*.onnx
+
+# Keep only deployment artifacts in Git (<100MB limit)
+!artifacts/resnet50_extractor.onnx
+!artifacts/pca_1024.pkl
 !artifacts/.gitkeep
 
 # Local data & raw images
@@ -76,6 +78,5 @@ htmlcov/
 *.log
 logs/
 
-artifacts/**
 Sample/**
 myntradataset/**
