@@ -27,9 +27,17 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str
 
     # Security
-    ADMIN_API_KEY: str 
-
+    ADMIN_API_KEY: str
     DB_URI: str
+
+    # CORS Configuration
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,*"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        if not self.CORS_ORIGINS:
+            return ["*"]
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parent.parent / ".env", env_file_encoding="utf-8")
     
